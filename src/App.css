@@ -1,0 +1,377 @@
+:root {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --text: #111827;
+  --muted: #6b7280;
+  --border: #d9dee6;
+  --accent: #2563eb;
+  --accent-dark: #1d4ed8;
+  --edited: #16a34a;
+  --danger: #b91c1c;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.muted {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.badge {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn,
+.zoom button {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.btn:hover:not(:disabled),
+.zoom button:hover {
+  background: #f3f4f6;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-dark);
+}
+
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.zoom span {
+  min-width: 44px;
+  text-align: center;
+}
+
+.zoom button {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.hint {
+  padding: 8px 20px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+/* ---------- Upload ---------- */
+.upload-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  gap: 24px;
+}
+
+.dropzone {
+  width: min(560px, 100%);
+  padding: 56px 24px;
+  border: 2px dashed #b8c2d1;
+  border-radius: 16px;
+  background: var(--panel);
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.dragging {
+  border-color: var(--accent);
+  background: #f5f8ff;
+  color: var(--accent);
+}
+
+.dropzone h2 {
+  margin: 16px 0 6px;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.dropzone p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.how-to {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.error-banner {
+  width: min(560px, 100%);
+  padding: 10px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.error-banner.floating {
+  margin: 0 auto 8px;
+}
+
+.loading-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.7);
+  font-weight: 600;
+}
+
+/* ---------- Pages ---------- */
+.viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 24px 48px;
+  overflow-x: auto;
+}
+
+.page {
+  position: relative;
+  flex: none;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.page canvas {
+  display: block;
+}
+
+.page-number {
+  position: absolute;
+  bottom: -20px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.page-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* ---------- Editable paragraphs ---------- */
+.tb-wrap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.tb-box {
+  position: absolute;
+  cursor: text;
+  border-radius: calc(var(--inv) * 3px);
+}
+
+.tb-box:hover {
+  outline: calc(var(--inv) * 1px) dashed rgba(37, 99, 235, 0.8);
+  background-color: rgba(37, 99, 235, 0.06);
+}
+
+.tb-box.edited:not(.active) {
+  box-shadow: inset calc(var(--inv) * 2px) 0 0 rgba(22, 163, 74, 0.6);
+}
+
+.tb-box.active {
+  outline: calc(var(--inv) * 1.5px) solid var(--accent);
+  outline-offset: calc(var(--inv) * 2px);
+}
+
+.tb-editor {
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  min-width: calc(var(--inv) * 4px);
+  overflow-wrap: break-word;
+  outline: none;
+  cursor: text;
+  caret-color: var(--accent);
+}
+
+.tb-editor::selection,
+.tb-editor *::selection {
+  background: rgba(37, 99, 235, 0.25);
+}
+
+.chip {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border-radius: 6px;
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.chip-font {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.chip-dim {
+  color: #9ca3af;
+  padding-right: 6px;
+}
+
+.chip-warn {
+  color: #fcd34d;
+  padding-right: 6px;
+}
+
+.chip-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: #374151;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chip-btn:hover {
+  background: #4b5563;
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+  .actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
