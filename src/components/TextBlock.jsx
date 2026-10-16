@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { multiply } from "../lib/geometry.js";
 import { toCss } from "../lib/colors.js";
+import { getLoadedFont } from "../lib/fonts.js";
 
 // Content is laid out at S CSS px per PDF point and scaled down by the CSS
 // matrix, which keeps text crisp and positions precise.
@@ -28,6 +30,12 @@ function styleOf(el, root) {
 
 const sameStyle = (a, b) => a.fontName === b.fontName && a.size === b.size && colorKey(a.color) === colorKey(b.color);
 
+// Clipboard format carrying the styled runs of text copied in the editor.
+const CLIP_MIME = "application/x-teleforce-pdf-runs";
+let lastCopy = null; // { text, runs } fallback if the browser drops the custom type
+
+const fontOf = (fonts, name) => fonts[name] || getLoadedFont(name);
+
 function applyFontStyle(el, run, font) {
   el.dataset.font = run.fontName;
   el.dataset.size = String(run.size);
@@ -47,7 +55,7 @@ function renderContent(root, content, fonts) {
       if (i > 0) root.appendChild(document.createElement("br"));
       if (!part) return;
       const span = document.createElement("span");
-      applyFontStyle(span, run, fonts[run.fontName]);
+      applyFontStyle(span, run, fontOf(fonts, run.fontName));
       span.textContent = part;
       root.appendChild(span);
     });
@@ -88,6 +96,66 @@ function serialize(root) {
     if (!last.text) runs.pop();
   }
   return runs;
+}
+
+/** Styled runs of the part of the editor covered by `range`. */
+function selectedRuns(root, range) {
+  const runs = [];
+  const add = (text, style) => {
+    if (!text) return;
+    const last = runs[runs.length - 1];
+    if (last && sameStyle(last, style)) last.text += text;
+    else runs.push({ ...style, text });
+  };
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (!range.intersectsNode(child)) continue;
+      if (child.nodeType === Node.TEXT_NODE) {
+        const start = child === range.startContainer ? range.startOffset : 0;
+        const end = child === range.endContainer ? range.endOffset : child.data.length;
+        add(child.data.slice(start, end).replace(/\u00a0/g, " "), styleOf(child.parentElement, root));
+      } else if (child.nodeName === "BR") {
+        add("\n", styleOf(child.parentElement, root));
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+  return runs;
+}
+
+/** Inserts styled runs at `range`, keeping their own font, size and colour. */
+function insertRuns(range, runs, fonts) {
+  range.deleteContents();
+  const frag = document.createDocumentFragment();
+  let lastNode = null;
+  for (const run of runs) {
+    run.text.split("\n").forEach((part, i) => {
+      if (i > 0) frag.appendChild((lastNode = document.createElement("br")));
+      if (!part) return;
+      const span = document.createElement("span");
+      applyFontStyle(span, run, fontOf(fonts, run.fontName));
+      span.textContent = part;
+      frag.appendChild((lastNode = span));
+    });
+  }
+  if (!lastNode) return;
+  range.insertNode(frag);
+  const caret = document.createRange();
+  caret.setStartAfter(lastNode);
+  caret.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(caret);
+}
+
+/** Inserts plain text at the caret, taking the style of the text around it. */
+function insertPlain(text) {
+  text.split("\n").forEach((line, i) => {
+    if (i > 0) document.execCommand("insertLineBreak");
+    if (line) document.execCommand("insertText", false, line);
+  });
 }
 
 /**
@@ -187,6 +255,8 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
   const ref = useRef(null);
   const startContent = useRef(entry.content);
   const lineHeightPx = block.lineGap * S;
+  // Styled text waiting for the user to pick a paste option.
+  const [pending, setPending] = useState(null);
 
   const emit = () => {
     const content = serialize(ref.current);
@@ -212,10 +282,43 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
     if (active && document.activeElement !== ref.current) placeCaret(ref.current, caretPoint);
   }, [active, caretPoint]);
 
+  const selectionRange = () => {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    return ref.current.contains(range.commonAncestorContainer) ? range : null;
+  };
+
+  const copySelection = (e) => {
+    const range = selectionRange();
+    if (!range || range.collapsed) return false;
+    const runs = selectedRuns(ref.current, range);
+    const text = runs.map((r) => r.text).join("");
+    e.clipboardData.setData("text/plain", text);
+    e.clipboardData.setData(CLIP_MIME, JSON.stringify(runs));
+    lastCopy = { text, runs };
+    e.preventDefault();
+    return true;
+  };
+
+  const choosePaste = (keepSource) => {
+    const p = pending;
+    setPending(null);
+    if (!p) return;
+    ref.current.focus({ preventScroll: true });
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(p.range);
+    if (keepSource) insertRuns(p.range, p.runs, fonts);
+    else insertPlain(p.text);
+    emit();
+  };
+
   const first = entry.content[0] || block.content[0];
-  const firstFont = fonts[first?.fontName];
+  const firstFont = fontOf(fonts, first?.fontName);
 
   return (
+    <>
     <div
       ref={ref}
       className="tb-editor"
@@ -242,8 +345,20 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
         onFocus();
       }}
       onInput={emit}
-      onBlur={onDone}
+      onBlur={() => {
+        setPending(null);
+        onDone();
+      }}
       onKeyDown={(e) => {
+        if (pending) {
+          // Paste options are open: Enter keeps the source style, M matches
+          // the destination, Esc cancels the paste.
+          e.preventDefault();
+          if (e.key === "Enter") choosePaste(true);
+          else if (e.key.toLowerCase() === "m") choosePaste(false);
+          else if (e.key === "Escape") setPending(null);
+          return;
+        }
         if (e.key === "Enter") {
           e.preventDefault();
           document.execCommand("insertLineBreak");
@@ -257,17 +372,93 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
           e.preventDefault(); // keep the PDF's own fonts; no browser formatting
         }
       }}
+      onCopy={copySelection}
+      onCut={(e) => {
+        if (copySelection(e)) {
+          document.execCommand("delete");
+          emit();
+        }
+      }}
       onPaste={(e) => {
         e.preventDefault();
-        const lines = e.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n").replace(/\t/g, " ").split("\n");
-        lines.forEach((line, i) => {
-          if (i > 0) document.execCommand("insertLineBreak");
-          if (line) document.execCommand("insertText", false, line);
-        });
+        const text = e.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n").replace(/\t/g, " ");
+        let runs = null;
+        try {
+          runs = JSON.parse(e.clipboardData.getData(CLIP_MIME) || "null");
+        } catch {
+          runs = null;
+        }
+        if (!runs && lastCopy && lastCopy.text === text) runs = lastCopy.runs;
+        const range = selectionRange();
+        if (runs?.length && range) {
+          // Styled text copied in this editor: ask whether to keep its style,
+          // unless it already matches the text it is pasted into.
+          const at = range.startContainer;
+          const dest = styleOf(at.nodeType === Node.TEXT_NODE ? at.parentElement : at, ref.current);
+          if (runs.some((r) => !sameStyle(r, dest))) {
+            const rect = range.getClientRects()[0] || ref.current.getBoundingClientRect();
+            setPending({ runs, text, dest, range: range.cloneRange(), x: rect.left, y: rect.bottom });
+            return;
+          }
+        }
+        insertPlain(text);
         emit();
       }}
       onDrop={(e) => e.preventDefault()}
     />
+    {pending &&
+      createPortal(
+        <PasteOptions pending={pending} fonts={fonts} onChoose={choosePaste} onCancel={() => setPending(null)} />,
+        document.body
+      )}
+    </>
+  );
+}
+
+function Preview({ run, text, fonts }) {
+  const font = fontOf(fonts, run.fontName);
+  return (
+    <span
+      className="paste-preview"
+      style={{ fontFamily: font?.cssFamily, fontWeight: font?.cssWeight, fontStyle: font?.cssStyle, color: toCss(run.color) }}
+    >
+      {text}
+    </span>
+  );
+}
+
+function PasteOptions({ pending, fonts, onChoose, onCancel }) {
+  const sample = pending.text.replace(/\s+/g, " ").trim();
+  const short = sample.length > 24 ? `${sample.slice(0, 24)}…` : sample;
+  const name = (run) => fontOf(fonts, run.fontName)?.displayName || "font";
+  const src = pending.runs[0];
+  const left = Math.min(Math.max(8, pending.x), window.innerWidth - 340);
+  const top = Math.min(pending.y + 6, window.innerHeight - 170);
+  return (
+    <div className="paste-menu" style={{ left, top }} onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Paste options">
+      <div className="paste-title">Paste as</div>
+      <button type="button" className="paste-option keep" onClick={() => onChoose(true)}>
+        <Preview run={src} text={short} fonts={fonts} />
+        <span className="paste-label">
+          <span className="paste-name">Keep source formatting <kbd>Enter</kbd></span>
+          <small>
+            {name(src)} · {src.size.toFixed(1)} pt{pending.runs.length > 1 ? " · mixed styles" : ""}
+          </small>
+        </span>
+      </button>
+      <button type="button" className="paste-option match" onClick={() => onChoose(false)}>
+        <Preview run={pending.dest} text={short} fonts={fonts} />
+        <span className="paste-label">
+          <span className="paste-name">Match destination <kbd>M</kbd></span>
+          <small>
+            {name(pending.dest)} · {pending.dest.size.toFixed(1)} pt
+          </small>
+        </span>
+      </button>
+      <button type="button" className="paste-cancel" onClick={onCancel}>
+        Cancel <kbd>Esc</kbd>
+      </button>
+    </div>
   );
 }
 

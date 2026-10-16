@@ -4,6 +4,7 @@ import fontkit from "@pdf-lib/fontkit";
 import { replaceCmap } from "./sfnt.js";
 
 const registry = new Map(); // pdf.js loadedName -> Promise<FontInfo>
+const loaded = new Map(); // pdf.js loadedName -> FontInfo, once ready
 const faces = [];
 let counter = 0;
 
@@ -18,14 +19,28 @@ export function resetFonts() {
   for (const face of faces) document.fonts.delete(face);
   faces.length = 0;
   registry.clear();
+  loaded.clear();
 }
 
 export function getFontInfo(loadedName) {
   return registry.get(loadedName) || Promise.resolve(null);
 }
 
+/** Already-loaded font info (any page), or undefined. */
+export function getLoadedFont(loadedName) {
+  return loaded.get(loadedName);
+}
+
 export function ensureFont(page, loadedName) {
-  if (!registry.has(loadedName)) registry.set(loadedName, loadFont(page, loadedName));
+  if (!registry.has(loadedName)) {
+    registry.set(
+      loadedName,
+      loadFont(page, loadedName).then((info) => {
+        if (info) loaded.set(loadedName, info);
+        return info;
+      })
+    );
+  }
   return registry.get(loadedName);
 }
 

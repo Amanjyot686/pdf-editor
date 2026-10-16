@@ -7,6 +7,14 @@ A React web app for the sales team to edit the text of an existing PDF and downl
 3. Click outside the paragraph to finish, or press `Esc` to cancel that edit.
 4. Click **Download PDF** (or press `Ctrl+S`) to get `<name>-edited.pdf`.
 
+**Copy and paste between text boxes:** text copied inside the editor remembers its font, size and colour. When you paste it somewhere with a different style, a small menu asks how to paste it:
+
+- **Keep source formatting** (`Enter`) pastes the text exactly as it looked where you copied it (for example, green "Confirmed").
+- **Match destination** (`M`) pastes the text in the style of the place you paste into (for example, yellow like "Pending").
+- **Cancel** (`Esc`) pastes nothing.
+
+Text copied from outside the editor always matches the destination.
+
 The **Revert** button on the floating bar undoes a single paragraph, and **Reset all** undoes every change.
 
 ## Running it

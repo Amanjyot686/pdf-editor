@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import TextBlock, { S, blockMatrix } from "./TextBlock.jsx";
 import { extractTextItems } from "../lib/pdfjs.js";
-import { ensureFont, missingChars } from "../lib/fonts.js";
+import { ensureFont, getLoadedFont, missingChars } from "../lib/fonts.js";
 import { buildBlocks } from "../lib/layout.js";
 import { applyPoint, coverRect, multiply, rectCorners } from "../lib/geometry.js";
 import { sampleColors } from "../lib/colors.js";
@@ -165,8 +165,8 @@ function ActiveChip({ block, viewport, fonts, entry, onRevert }) {
   const maxY = Math.max(...corners.map((p) => p[1]));
   const top = minY > 40 ? minY - 34 : maxY + 6;
 
-  const missing = [...new Set(entry.content.flatMap((r) => missingChars(r.text.replace(/\n/g, ""), fonts[r.fontName])))];
-  const fontNames = [...new Set(entry.content.map((r) => fonts[r.fontName]?.displayName).filter(Boolean))];
+  const missing = [...new Set(entry.content.flatMap((r) => missingChars(r.text.replace(/\n/g, ""), fonts[r.fontName] || getLoadedFont(r.fontName))))];
+  const fontNames = [...new Set(entry.content.map((r) => (fonts[r.fontName] || getLoadedFont(r.fontName))?.displayName).filter(Boolean))];
   const sizes = [...new Set(entry.content.map((r) => r.size.toFixed(1)))];
   const edited = entry.text !== block.text;
   const overflow = (entry.lines?.length || 0) > block.lineCount;
