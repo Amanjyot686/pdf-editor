@@ -41,7 +41,17 @@ export default function FormatToolbar({ block, entry, api, position, onRevert, o
     ),
   ];
   const overflow = (entry.lines?.length || 0) > block.lineCount;
-  const simulated = entry.content.some((r) => r.text.trim() && !resolveVariant(r).exact);
+  // A bold / italic style the PDF has no font for, e.g. "Calibri Bold".
+  const notInPdf = entry.content
+    .filter((r) => r.text.trim())
+    .map(resolveVariant)
+    .find((v) => !v.exact && v.info);
+  const simulated = !!notInPdf;
+  const wantedName = notInPdf
+    ? [notInPdf.info.families[0] || notInPdf.info.displayName, notInPdf.bold && "Bold", notInPdf.italic && "Italic"]
+        .filter(Boolean)
+        .join(" ") + (!notInPdf.bold && !notInPdf.italic ? " Regular" : "")
+    : "";
 
   const commitSize = () => {
     const n = parseFloat(sizeDraft);
@@ -179,8 +189,8 @@ export default function FormatToolbar({ block, entry, api, position, onRevert, o
             </span>
           )}
           {simulated && (
-            <span title="This PDF has no bold/italic version of this font. The installed version is used if available, otherwise bold/italic is simulated.">
-              ⓘ bold/italic not in PDF – using installed or simulated style
+            <span title="Not an error. PDFs only include the font styles they use. When you download, the browser asks to use the fonts installed on this computer; allow it to get the real style. Otherwise bold/italic is simulated (or, when removing bold/italic, the closest standard font is used).">
+              ⓘ {wantedName} isn’t in this PDF. On download your installed {wantedName} is used, otherwise it’s simulated
             </span>
           )}
           {overflow && <span title="The paragraph now has more lines than before and may overlap content below it.">⚠ longer than original</span>}
