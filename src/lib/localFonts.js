@@ -29,9 +29,9 @@ function styleKey(style) {
 /** Returns the font file bytes for the installed equivalent of `info`, or null. */
 export async function findLocalFont(info) {
   const fonts = await (fontsPromise || Promise.resolve([]));
-  if (!fonts.length || !info?.psName) return null;
+  if (!fonts.length || !(info?.psName || info?.families?.length)) return null;
 
-  let match = fonts.find((f) => norm(f.postscriptName) === norm(info.psName));
+  let match = info.psName ? fonts.find((f) => norm(f.postscriptName) === norm(info.psName)) : null;
   if (!match) {
     const families = info.families.map(norm);
     const want = `${info.bold ? "bold" : ""}${info.italic ? "italic" : ""}`;

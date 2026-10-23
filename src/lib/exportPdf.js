@@ -18,14 +18,19 @@ import {
   rectangle,
   setFillingRgbColor,
   setFontAndSize,
+  setLineWidth,
+  setStrokingRgbColor,
   setTextMatrix,
+  setTextRenderingMode,
   showText,
+  TextRenderingMode,
 } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import dejaVuSansUrl from "dejavu-fonts-ttf/ttf/DejaVuSans.ttf?url";
 import dejaVuSansBoldUrl from "dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf?url";
-import { getFontInfo, isWinAnsi } from "./fonts.js";
+import { getFontInfo, isWinAnsi, resolveVariant } from "./fonts.js";
 import { removeOriginalText } from "./contentStream.js";
+import { lineGapOf } from "./entries.js";
 import { findLocalFont } from "./localFonts.js";
 
 function standardFontFor(info) {
@@ -65,6 +70,16 @@ export async function exportEditedPdf(originalBytes, entries) {
       const font = await doc.embedFont(bytes, { subset: !isCff });
       return { font, hasGlyph: (ch) => fk.hasGlyphForCodePoint(ch.codePointAt(0)) };
     });
+  // Installed font of the same family in another style (bold / italic).
+  const embedLocalStyle = (info, bold, italic) =>
+    once(`localstyle:${info.families.join("|")}:${bold}:${italic}`, async () => {
+      const bytes = await findLocalFont({ psName: "", families: info.families, bold, italic });
+      if (!bytes) return null;
+      const fk = fontkit.create(bytes);
+      const isCff = String.fromCharCode(...bytes.subarray(0, 4)) === "OTTO";
+      const font = await doc.embedFont(bytes, { subset: !isCff });
+      return { font, hasGlyph: (ch) => fk.hasGlyphForCodePoint(ch.codePointAt(0)) };
+    });
   const embedStandard = (name) => once(`std:${name}`, () => doc.embedFont(name));
   const embedUnicode = (bold) =>
     once(`uni:${bold}`, async () => {
@@ -78,12 +93,31 @@ export async function exportEditedPdf(originalBytes, entries) {
    * Widths are in pt.
    */
   async function resolveRun(run, needsAll) {
-    const info = await getFontInfo(run.fontName);
-    const primary = info?.embedded ? await embedOriginal(info) : null;
-    const standard = await embedStandard(standardFontFor(info));
+    // Bold / italic: the document's own variant, else the installed one,
+    // else the original font with simulated bold / slant.
+    const v = resolveVariant(run);
+    const info = v.info || (await getFontInfo(run.fontName));
     const chars = [...run.text];
-    const missing = chars.some((ch) => !(primary && info.hasGlyph(ch)));
-    const local = missing && info ? await embedLocal(info) : null;
+    let primary = null;
+    let local = null;
+    let synthBold = false;
+    let synthItalic = false;
+    let styleInfo = info;
+    if (v.exact || !info) {
+      primary = info?.embedded ? await embedOriginal(info) : null;
+      if (chars.some((ch) => !(primary && info.hasGlyph(ch))) && info) local = await embedLocal(info);
+    } else {
+      styleInfo = { ...info, bold: v.bold, italic: v.italic };
+      local = await embedLocalStyle(info, v.bold, v.italic);
+      const removing = (!v.bold && info.bold) || (!v.italic && info.italic);
+      if (!local && !removing && info.embedded) {
+        primary = await embedOriginal(info);
+        synthBold = v.bold && !info.bold;
+        synthItalic = v.italic && !info.italic;
+        if (chars.some((ch) => !info.hasGlyph(ch))) local = await embedLocal(info);
+      }
+    }
+    const standard = await embedStandard(standardFontFor(styleInfo));
     const has = (font, ch) =>
       font === primary ? info.hasGlyph(ch) : font === local?.font ? local.hasGlyph(ch) : font === standard ? isWinAnsi(ch) : true;
     const spaceFont = primary && info.hasGlyph(" ") ? primary : local?.hasGlyph(" ") ? local.font : standard;
@@ -103,7 +137,7 @@ export async function exportEditedPdf(originalBytes, entries) {
       if (ch === " ") {
         // Separate spaces when justifying, so the gaps can be stretched.
         if (!needsAll && last?.font && has(last.font, " ")) last.text += ch;
-        else parts.push({ gap: true, space: true, width: spaceWidth });
+        else parts.push({ gap: true, space: true, width: spaceWidth, underline: !!run.underline, size: run.size, color: run.color });
         continue;
       }
       const font = await pick(ch);
@@ -115,6 +149,12 @@ export async function exportEditedPdf(originalBytes, entries) {
       if (!p.gap) p.width = p.font.widthOfTextAtSize(p.text, run.size);
       p.size = run.size;
       p.color = run.color;
+      p.underline = !!run.underline;
+      // Simulated styles apply to the original-style fonts, not to the
+      // standard fallback (which already has the right style).
+      const original = p.font === primary || (synthBold || synthItalic ? p.font === local?.font : false);
+      p.synthBold = synthBold && original;
+      p.synthItalic = synthItalic && original;
     }
     return parts;
   }
@@ -137,7 +177,8 @@ export async function exportEditedPdf(originalBytes, entries) {
     page.node.normalize();
     const b = entry.block;
     const lines = entry.lines || [{ runs: entry.content, hard: true }];
-    const justify = b.align === "justify";
+    const align = entry.align || b.align;
+    const justify = align === "justify";
 
     const laid = [];
     for (let i = 0; i < lines.length; i++) {
@@ -157,14 +198,14 @@ export async function exportEditedPdf(originalBytes, entries) {
       let x = b.editorLeft + indent;
       let extra = 0;
       if (b.wrapWidth != null) {
-        if (b.align === "center") x += (avail - natural) / 2;
-        else if (b.align === "right") x += avail - natural;
+        if (align === "center") x += (avail - natural) / 2;
+        else if (align === "right") x += avail - natural;
         else if (stretch) {
           const spaces = parts.filter((p) => p.space).length;
           if (spaces && avail > natural) extra = (avail - natural) / spaces;
         }
       }
-      laid.push({ parts, x, extra, y: b.firstBaseline - i * b.lineGap, width: natural + extra * parts.filter((p) => p.space).length });
+      laid.push({ parts, x, extra, y: b.firstBaseline - i * lineGapOf(entry), width: natural + extra * parts.filter((p) => p.space).length });
     }
 
     // Local frame (x along the text, y up) -> page user space.
@@ -187,29 +228,53 @@ export async function exportEditedPdf(originalBytes, entries) {
 
     ops.push(pushGraphicsState(), beginText());
     let color = null;
+    let outlined = false;
+    const underlines = [];
     for (const line of laid) {
       let x = line.x;
       for (const p of line.parts) {
+        const w = p.width + (p.space ? line.extra : 0);
+        if (p.underline) {
+          const last = underlines[underlines.length - 1];
+          if (last && last.line === line && Math.abs(last.x1 - x) < 0.01 && last.size === p.size) last.x1 = x + w;
+          else underlines.push({ line, x0: x, x1: x + w, size: p.size, color: p.color });
+        }
         if (p.gap) {
-          x += p.width + (p.space ? line.extra : 0);
+          x += w;
           continue;
         }
         const key = page.node.newFontDictionary(p.font.name, p.font.ref);
         const c = unit(p.color);
         if (!color || c.some((v, k) => v !== color[k])) {
-          ops.push(setFillingRgbColor(...c));
+          ops.push(setFillingRgbColor(...c), setStrokingRgbColor(...c));
           color = c;
         }
+        // Simulated bold: fill and outline the glyphs.
+        if (p.synthBold !== outlined) {
+          ops.push(setTextRenderingMode(p.synthBold ? TextRenderingMode.FillAndOutline : TextRenderingMode.Fill));
+          if (p.synthBold) ops.push(setLineWidth(p.size * 0.035));
+          outlined = p.synthBold;
+        }
+        // Simulated italic: slant the glyphs by ~11 degrees.
+        const k = p.synthItalic ? 0.2 : 0;
         const [ux, uy] = toUser(x, line.y);
         ops.push(
           setFontAndSize(key, p.size),
-          setTextMatrix(cos, sin, -sin, cos, ux, uy),
+          setTextMatrix(cos, sin, k * cos - sin, k * sin + cos, ux, uy),
           showText(p.font.encodeText(p.text))
         );
         x += p.width;
       }
     }
     ops.push(endText(), popGraphicsState());
+    if (underlines.length) {
+      ops.push(pushGraphicsState(), concatTransformationMatrix(cos, sin, -sin, cos, 0, 0));
+      for (const u of underlines) {
+        const thickness = Math.max(0.05 * u.size, 0.5);
+        ops.push(setFillingRgbColor(...unit(u.color)), rectangle(u.x0, u.line.y - 0.12 * u.size - thickness / 2, u.x1 - u.x0, thickness), fill());
+      }
+      ops.push(popGraphicsState());
+    }
     page.pushOperators(...ops);
   }
 

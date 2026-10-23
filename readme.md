@@ -7,6 +7,16 @@ A React web app for the sales team to edit the text of an existing PDF and downl
 3. Click outside the paragraph to finish, or press `Esc` to cancel that edit.
 4. Click **Download PDF** (or press `Ctrl+S`) to get `<name>-edited.pdf`.
 
+**Formatting:** a toolbar appears above the paragraph you're editing. It applies to the selected text, or to the whole paragraph when nothing is selected:
+
+- **Font:** any font family used in the document.
+- **Size:** type a value, or use − / +.
+- **Bold, italic, underline:** the toolbar buttons, or `Ctrl+B` / `Ctrl+I` / `Ctrl+U`.
+- **Text colour.**
+- **Alignment:** left, centre, right or justified, for multi-line paragraphs.
+
+Bold and italic use the document's own bold/italic version of the font when it has one, for example Calibri → Calibri-Bold. Otherwise the installed version is used, which Chrome/Edge ask permission for when downloading. If neither is available, bold and italic are simulated. Removing bold or italic from a font the PDF only has in bold falls back to the closest standard font. A note in the toolbar says when this happens.
+
 **Copy and paste between text boxes:** text copied inside the editor remembers its font, size and colour. When you paste it somewhere with a different style, a small menu asks how to paste it:
 
 - **Keep source formatting** (`Enter`) pastes the text exactly as it looked where you copied it (for example, green "Confirmed").

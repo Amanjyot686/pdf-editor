@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { multiply } from "../lib/geometry.js";
 import { toCss } from "../lib/colors.js";
-import { getLoadedFont } from "../lib/fonts.js";
+import { getLoadedFont, runCss } from "../lib/fonts.js";
+import { isEdited, lineGapOf } from "../lib/entries.js";
 
 // Content is laid out at S CSS px per PDF point and scaled down by the CSS
 // matrix, which keeps text crisp and positions precise.
@@ -22,13 +23,37 @@ const parseColor = (s) => {
   return { r, g, b };
 };
 
+const flag = (v) => (v === "1" ? true : v === "0" ? false : undefined);
+
 function styleOf(el, root) {
   const span = el?.closest?.("[data-font]");
   const src = span && root.contains(span) ? span : root;
-  return { fontName: src.dataset.font, size: Number(src.dataset.size), color: parseColor(src.dataset.color) };
+  const style = { fontName: src.dataset.font, size: Number(src.dataset.size), color: parseColor(src.dataset.color) };
+  const bold = flag(src.dataset.bold);
+  const italic = flag(src.dataset.italic);
+  if (bold !== undefined) style.bold = bold;
+  if (italic !== undefined) style.italic = italic;
+  if (src.dataset.underline === "1") style.underline = true;
+  return style;
 }
 
-const sameStyle = (a, b) => a.fontName === b.fontName && a.size === b.size && colorKey(a.color) === colorKey(b.color);
+const sameStyle = (a, b) =>
+  a.fontName === b.fontName &&
+  a.size === b.size &&
+  colorKey(a.color) === colorKey(b.color) &&
+  a.bold === b.bold &&
+  a.italic === b.italic &&
+  !!a.underline === !!b.underline;
+
+/** Drops bold / italic settings that just repeat what the font already is. */
+function normalizeRun(run) {
+  const info = getLoadedFont(run.fontName);
+  const out = { ...run };
+  if (info && out.bold === info.bold) delete out.bold;
+  if (info && out.italic === info.italic) delete out.italic;
+  if (!out.underline) delete out.underline;
+  return out;
+}
 
 // Clipboard format carrying the styled runs of text copied in the editor.
 const CLIP_MIME = "application/x-teleforce-pdf-runs";
@@ -36,15 +61,86 @@ let lastCopy = null; // { text, runs } fallback if the browser drops the custom 
 
 const fontOf = (fonts, name) => fonts[name] || getLoadedFont(name);
 
+// eslint-disable-next-line no-unused-vars
 function applyFontStyle(el, run, font) {
   el.dataset.font = run.fontName;
   el.dataset.size = String(run.size);
   el.dataset.color = colorKey(run.color);
-  el.style.fontFamily = font?.cssFamily || "sans-serif";
-  el.style.fontWeight = font?.cssWeight || "normal";
-  el.style.fontStyle = font?.cssStyle || "normal";
+  if (run.bold !== undefined) el.dataset.bold = run.bold ? "1" : "0";
+  if (run.italic !== undefined) el.dataset.italic = run.italic ? "1" : "0";
+  if (run.underline) el.dataset.underline = "1";
+  // Shows bold / italic the way the export will draw it.
+  const css = runCss(run);
+  el.style.fontFamily = css.family;
+  el.style.fontWeight = css.weight;
+  el.style.fontStyle = css.style;
   el.style.fontSize = `${run.size * S}px`;
   el.style.color = toCss(run.color);
+  el.style.textDecoration = run.underline ? "underline" : "none";
+}
+
+/** Text offset of a DOM position (BR counts as one "\n"). */
+function offsetOf(root, container, offset) {
+  let count = 0;
+  let found = null;
+  const walk = (node) => {
+    if (found !== null) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node === container) found = count + offset;
+      else count += node.data.length;
+      return;
+    }
+    if (node.nodeName === "BR") {
+      count += 1;
+      return;
+    }
+    const kids = node.childNodes;
+    for (let i = 0; i < kids.length; i++) {
+      if (node === container && i === offset) {
+        found = count;
+        return;
+      }
+      walk(kids[i]);
+      if (found !== null) return;
+    }
+    if (node === container) found = count;
+  };
+  walk(root);
+  return found ?? count;
+}
+
+/** DOM position of a text offset. */
+function positionAt(root, target) {
+  let count = 0;
+  let result = null;
+  const walk = (node) => {
+    for (let i = 0; i < node.childNodes.length && !result; i++) {
+      const child = node.childNodes[i];
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (target <= count + child.data.length) result = { node: child, offset: target - count };
+        else count += child.data.length;
+      } else if (child.nodeName === "BR") {
+        if (target <= count) result = { node, offset: i };
+        else count += 1;
+      } else {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+  return result || { node: root, offset: root.childNodes.length };
+}
+
+function selectOffsets(root, a, b) {
+  const start = positionAt(root, a);
+  const end = positionAt(root, b);
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return range;
 }
 
 /** Renders styled runs ("\n" = line break) into the editor element. */
@@ -251,29 +347,158 @@ function placeCaret(el, point) {
   sel.addRange(range);
 }
 
-function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChange, onDone }) {
+function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChange, onDone, registerEditor }) {
   const ref = useRef(null);
   const startContent = useRef(entry.content);
-  const lineHeightPx = block.lineGap * S;
+  const savedRange = useRef(null);
+  const lineHeightPx = lineGapOf(entry) * S;
   // Styled text waiting for the user to pick a paste option.
   const [pending, setPending] = useState(null);
 
-  const emit = () => {
-    const content = serialize(ref.current);
-    onChange({ content, lines: measureLines(ref.current, lineHeightPx) });
-  };
-
-  // Uncontrolled: React never rewrites the text while the user is typing.
-  useLayoutEffect(() => {
+  // Keeps the first baseline exactly on the original one.
+  const alignBaseline = () => {
     const el = ref.current;
-    renderContent(el, entry.content, fonts);
-    // Shift the editor so its first baseline sits exactly on the original one.
     const marker = document.createElement("span");
     marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
     el.insertBefore(marker, el.firstChild);
     const baseline = marker.offsetTop;
     marker.remove();
     el.style.top = `${(block.top - block.firstBaseline) * S - baseline}px`;
+  };
+
+  const emit = (extra) => {
+    const content = serialize(ref.current);
+    const gap = lineGapOf({ ...entry, content }) * S;
+    ref.current.style.lineHeight = `${gap}px`;
+    onChange({ content, lines: measureLines(ref.current, gap), ...extra });
+  };
+
+  // Remember the selection, so toolbar controls that take focus can use it.
+  useEffect(() => {
+    const onSel = () => {
+      const sel = window.getSelection();
+      if (sel.rangeCount && ref.current?.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        savedRange.current = sel.getRangeAt(0).cloneRange();
+      }
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, []);
+
+  /** Selection as text offsets; a bare caret means the whole paragraph. */
+  const targetOffsets = () => {
+    const root = ref.current;
+    const total = offsetOf(root, root, root.childNodes.length);
+    // The live selection while the editor has focus (selectionchange fires
+    // late, so the saved copy can lag); the saved one when a toolbar control
+    // has taken focus.
+    const sel = window.getSelection();
+    const live = document.activeElement === root && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const r = live && root.contains(live.commonAncestorContainer) ? live : savedRange.current;
+    if (!r || !root.contains(r.commonAncestorContainer)) return [0, total, true];
+    const a = offsetOf(root, r.startContainer, r.startOffset);
+    const b = offsetOf(root, r.endContainer, r.endOffset);
+    return a === b ? [0, total, true] : [Math.min(a, b), Math.max(a, b), false];
+  };
+
+  /** Runs inside the target range (for the toolbar's on/off states). */
+  const targetRuns = () => {
+    const [a, b] = targetOffsets();
+    const out = [];
+    let pos = 0;
+    for (const r of serialize(ref.current)) {
+      const s0 = pos;
+      pos += r.text.length;
+      if (pos > a && s0 < b && r.text.trim()) out.push(r);
+    }
+    return out.length ? out : serialize(ref.current).slice(0, 1);
+  };
+
+  /** Applies `patch(run)` to the selected text (or the whole paragraph). */
+  const format = (patch, { refocus = true } = {}) => {
+    const root = ref.current;
+    const [a, b, whole] = targetOffsets();
+    const out = [];
+    let pos = 0;
+    for (const r of serialize(root)) {
+      const s0 = pos;
+      const e0 = pos + r.text.length;
+      pos = e0;
+      const cuts = [s0, Math.min(e0, Math.max(s0, a)), Math.min(e0, Math.max(s0, b)), e0];
+      for (let k = 0; k < 3; k++) {
+        const text = r.text.slice(cuts[k] - s0, cuts[k + 1] - s0);
+        if (!text) continue;
+        const piece = k === 1 ? normalizeRun(patch({ ...r, text })) : { ...r, text };
+        const last = out[out.length - 1];
+        if (last && sameStyle(last, piece)) last.text += piece.text;
+        else out.push(piece);
+      }
+    }
+    renderContent(root, out, fonts);
+    alignBaseline();
+    if (refocus) root.focus({ preventScroll: true });
+    savedRange.current = whole ? null : selectOffsets(root, a, b).cloneRange();
+    emit({ formatted: true });
+  };
+
+  const api = {
+    state() {
+      const runs = targetRuns();
+      const w = runs.map((r) => {
+        const info = getLoadedFont(r.fontName);
+        return { bold: r.bold ?? !!info?.bold, italic: r.italic ?? !!info?.italic };
+      });
+      const uniform = (fn) => (runs.every((r) => fn(r) === fn(runs[0])) ? fn(runs[0]) : null);
+      return {
+        bold: w.every((x) => x.bold),
+        italic: w.every((x) => x.italic),
+        underline: runs.every((r) => r.underline),
+        size: uniform((r) => r.size),
+        color: runs[0]?.color,
+        fontName: uniform((r) => r.fontName),
+        align: entry.align || block.align,
+        canAlign: block.wrapWidth != null,
+      };
+    },
+    format,
+    setAlign(align) {
+      ref.current.style.textAlign = align;
+      emit({ align, formatted: true });
+    },
+    focus() {
+      ref.current.focus({ preventScroll: true });
+      if (savedRange.current) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(savedRange.current);
+      }
+    },
+  };
+  const apiRef = useRef(api);
+  apiRef.current = api;
+
+  useEffect(() => {
+    // A stable facade, so the toolbar always calls the latest handlers.
+    const facade = {
+      state: () => apiRef.current.state(),
+      format: (...a) => apiRef.current.format(...a),
+      setAlign: (a) => apiRef.current.setAlign(a),
+      focus: () => apiRef.current.focus(),
+    };
+    registerEditor?.(block.id, facade);
+    return () => registerEditor?.(block.id, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (key) => {
+    const st = api.state();
+    format((r) => ({ ...r, [key]: !st[key] }));
+  };
+
+  // Uncontrolled: React never rewrites the text while the user is typing.
+  useLayoutEffect(() => {
+    renderContent(ref.current, entry.content, fonts);
+    alignBaseline();
     if (!entry.lines) emit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -311,7 +536,8 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
     sel.addRange(p.range);
     if (keepSource) insertRuns(p.range, p.runs, fonts);
     else insertPlain(p.text);
-    emit();
+    alignBaseline();
+    emit(keepSource ? { formatted: true } : undefined);
   };
 
   const first = entry.content[0] || block.content[0];
@@ -332,7 +558,7 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
         width: block.wrapWidth != null ? block.wrapWidth * S : undefined,
         whiteSpace: block.wrapWidth != null ? "pre-wrap" : "pre",
         lineHeight: `${lineHeightPx}px`,
-        textAlign: block.align,
+        textAlign: entry.align || block.align,
         textIndent: block.indent * S,
         fontFamily: firstFont?.cssFamily,
         fontWeight: firstFont?.cssWeight,
@@ -345,8 +571,10 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
         onFocus();
       }}
       onInput={emit}
-      onBlur={() => {
+      onBlur={(e) => {
         setPending(null);
+        // Focus moving into the formatting toolbar keeps the paragraph active.
+        if (e.relatedTarget?.closest?.(".fmt-toolbar")) return;
         onDone();
       }}
       onKeyDown={(e) => {
@@ -369,7 +597,8 @@ function BlockEditor({ block, entry, fonts, active, caretPoint, onFocus, onChang
           emit();
           ref.current.blur();
         } else if ((e.ctrlKey || e.metaKey) && ["b", "i", "u"].includes(e.key.toLowerCase())) {
-          e.preventDefault(); // keep the PDF's own fonts; no browser formatting
+          e.preventDefault();
+          toggle({ b: "bold", i: "italic", u: "underline" }[e.key.toLowerCase()]);
         }
       }}
       onCopy={copySelection}
@@ -462,10 +691,10 @@ function PasteOptions({ pending, fonts, onChoose, onCancel }) {
   );
 }
 
-export default function TextBlock({ block, viewportTransform, fonts, entry, active, caretPoint, onActivate, onChange, onBlur }) {
+export default function TextBlock({ block, viewportTransform, fonts, entry, active, caretPoint, onActivate, onChange, onBlur, registerEditor }) {
   const m = blockMatrix(block, viewportTransform);
   const inv = 1 / Math.hypot(m[0], m[1]); // content px per screen px
-  const edited = !!entry && entry.text !== block.text;
+  const edited = isEdited(entry);
   const showEditor = !!entry && (active || edited);
   const pad = 0.12 * block.size * S;
 
@@ -498,6 +727,7 @@ export default function TextBlock({ block, viewportTransform, fonts, entry, acti
           onFocus={() => !active && onActivate(block, null)}
           onChange={(data) => onChange(block.id, data)}
           onDone={() => onBlur(block.id)}
+          registerEditor={registerEditor}
         />
       )}
     </div>

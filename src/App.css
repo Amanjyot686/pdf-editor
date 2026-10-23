@@ -366,6 +366,170 @@ kbd {
   background: #4b5563;
 }
 
+/* ---------- Formatting toolbar ---------- */
+.fmt-toolbar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.fmt-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.fmt-font {
+  width: 150px;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.fmt-size {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.fmt-size button {
+  width: 24px;
+  height: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.fmt-size button:hover {
+  background: #f3f4f6;
+}
+
+.fmt-size input {
+  width: 38px;
+  height: 100%;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  font: inherit;
+}
+
+.fmt-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.fmt-btn:hover {
+  background: #f3f4f6;
+}
+
+.fmt-btn.on {
+  background: #dbe6ff;
+  color: var(--accent-dark);
+}
+
+.fmt-b {
+  font-weight: 800;
+}
+
+.fmt-i {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.fmt-u {
+  text-decoration: underline;
+}
+
+.fmt-color {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.fmt-color:hover {
+  background: #f3f4f6;
+}
+
+.fmt-color-a {
+  padding: 0 3px;
+  border-bottom: 4px solid;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.fmt-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.fmt-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.fmt-revert {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.fmt-revert:hover {
+  background: #e5e7eb;
+}
+
+.fmt-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 2px 6px 1px;
+  color: #92400e;
+  font-size: 12px;
+  white-space: normal;
+}
+
 /* ---------- Paste options ---------- */
 .paste-menu {
   position: fixed;

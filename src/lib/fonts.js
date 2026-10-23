@@ -162,6 +162,8 @@ async function loadFont(page, loadedName) {
     displayName,
     psName,
     families,
+    faceFamily: face ? chain[0] : null,
+    generic,
     bold,
     italic,
     serif,
@@ -212,4 +214,73 @@ export function missingChars(text, info) {
     if (!ok) out.add(ch);
   }
   return [...out];
+}
+
+/* ---------------- Bold / italic variants ---------------- */
+
+const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** Family identity of a font ("Calibri-Bold" and "Calibri" share one). */
+export function familyKey(info) {
+  return norm(info?.families?.[0] || info?.displayName?.split("-")[0]);
+}
+
+/** Effective bold / italic of a run: its own setting, else its font's. */
+export function runWeight(run) {
+  const info = getLoadedFont(run.fontName);
+  return { bold: run.bold ?? !!info?.bold, italic: run.italic ?? !!info?.italic };
+}
+
+/**
+ * Finds the font to draw a run with. If the run asks for bold / italic that
+ * its font does not have, the document's own font of the same family with
+ * that style is used when there is one (`exact`); otherwise the caller must
+ * use an installed font or simulate the style.
+ */
+export function resolveVariant(run) {
+  const base = getLoadedFont(run.fontName);
+  const { bold, italic } = runWeight(run);
+  if (!base || (base.bold === bold && base.italic === italic)) {
+    return { info: base, fontName: run.fontName, bold, italic, exact: true };
+  }
+  const fam = familyKey(base);
+  for (const [name, info] of loaded) {
+    if (familyKey(info) === fam && info.bold === bold && info.italic === italic) {
+      return { info, fontName: name, bold, italic, exact: true };
+    }
+  }
+  return { info: base, fontName: run.fontName, bold, italic, exact: false };
+}
+
+/** CSS font settings that display a run as it will be exported. */
+export function runCss(run) {
+  const v = resolveVariant(run);
+  const info = v.info;
+  if (!info) return { family: "sans-serif", weight: v.bold ? "bold" : "normal", style: v.italic ? "italic" : "normal" };
+  if (v.exact) return { family: info.cssFamily, weight: info.cssWeight, style: info.cssStyle };
+  // No such variant in the PDF: prefer the installed family (real bold /
+  // italic), then the PDF's own font, which the browser styles synthetically.
+  const chain = [...info.families.map((f) => `"${f}"`), info.faceFamily, info.generic].filter(Boolean);
+  return { family: chain.join(", "), weight: v.bold ? "bold" : "normal", style: v.italic ? "italic" : "normal" };
+}
+
+/** Font families used in the document, for the font picker. */
+export function documentFamilies() {
+  const byKey = new Map();
+  for (const [name, info] of loaded) {
+    const key = familyKey(info);
+    if (!key) continue;
+    const entry = byKey.get(key) || { key, label: info.families[0] || info.displayName, fonts: [] };
+    entry.fonts.push({ name, info });
+    byKey.set(key, entry);
+  }
+  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Best font of a family for the wanted style (exact match first). */
+export function pickFamilyFont(key, bold, italic) {
+  const fam = documentFamilies().find((f) => f.key === key);
+  if (!fam) return null;
+  const score = (i) => (i.bold === bold ? 2 : 0) + (i.italic === italic ? 1 : 0);
+  return fam.fonts.reduce((best, f) => (!best || score(f.info) > score(best.info) ? f : best), null).name;
 }

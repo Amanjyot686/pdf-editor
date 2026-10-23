@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TextBlock, { S, blockMatrix } from "./TextBlock.jsx";
+import FormatToolbar from "./FormatToolbar.jsx";
 import { extractTextItems } from "../lib/pdfjs.js";
-import { ensureFont, getLoadedFont, missingChars } from "../lib/fonts.js";
+import { ensureFont } from "../lib/fonts.js";
 import { buildBlocks } from "../lib/layout.js";
 import { applyPoint, coverRect, multiply, rectCorners } from "../lib/geometry.js";
 import { sampleColors } from "../lib/colors.js";
@@ -26,6 +27,14 @@ export default function PdfPage({ pdf, pageIndex, scale, edits, active, onActiva
   const [blocks, setBlocks] = useState(null);
   const [fonts, setFonts] = useState({});
   const [error, setError] = useState("");
+  // Formatting controllers of the open paragraph editors, by block id.
+  const editors = useRef(new Map());
+  const [, setEditorsVersion] = useState(0);
+  const registerEditor = useCallback((id, api) => {
+    if (api) editors.current.set(id, api);
+    else editors.current.delete(id);
+    setEditorsVersion((v) => v + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,18 +139,20 @@ export default function PdfPage({ pdf, pageIndex, scale, edits, active, onActiva
               onActivate={handleActivate}
               onChange={onChange}
               onBlur={onBlur}
+              registerEditor={registerEditor}
             />
           ))}
-          {activeBlock && edits[activeBlock.id] && (
-            <ActiveChip
-              block={activeBlock}
-              viewport={viewport}
-              fonts={fonts}
-              entry={edits[activeBlock.id]}
-              onRevert={onRevert}
-            />
-          )}
         </div>
+      )}
+      {activeBlock && edits[activeBlock.id] && viewport && (
+        <FormatToolbar
+          block={activeBlock}
+          entry={edits[activeBlock.id]}
+          api={editors.current.get(activeBlock.id)}
+          position={toolbarPosition(activeBlock, viewport)}
+          onRevert={onRevert}
+          onLeave={() => onBlur(activeBlock.id)}
+        />
       )}
       <div className="page-number">{pageIndex + 1}</div>
     </div>
@@ -157,53 +168,16 @@ function blockCorners(block, viewport) {
   return [applyPoint(m, x0, 0), applyPoint(m, x1, 0), applyPoint(m, x1, h), applyPoint(m, x0, h)];
 }
 
-function ActiveChip({ block, viewport, fonts, entry, onRevert }) {
+// Places the formatting bar above the paragraph (below it near the page top).
+function toolbarPosition(block, viewport) {
   const corners = blockCorners(block, viewport);
   const minX = Math.min(...corners.map((p) => p[0]));
   const maxX = Math.max(...corners.map((p) => p[0]));
   const minY = Math.min(...corners.map((p) => p[1]));
   const maxY = Math.max(...corners.map((p) => p[1]));
-  const top = minY > 40 ? minY - 34 : maxY + 6;
-
-  const missing = [...new Set(entry.content.flatMap((r) => missingChars(r.text.replace(/\n/g, ""), fonts[r.fontName] || getLoadedFont(r.fontName))))];
-  const fontNames = [...new Set(entry.content.map((r) => (fonts[r.fontName] || getLoadedFont(r.fontName))?.displayName).filter(Boolean))];
-  const sizes = [...new Set(entry.content.map((r) => r.size.toFixed(1)))];
-  const edited = entry.text !== block.text;
-  const overflow = (entry.lines?.length || 0) > block.lineCount;
-
-  return (
-    <div
-      className="chip"
-      style={
-        minX + 420 > viewport.width
-          ? { right: Math.max(4, viewport.width - maxX), top }
-          : { left: Math.max(4, minX), top }
-      }
-      onMouseDown={(e) => e.preventDefault()}
-    >
-      <span className="chip-font" title={fontNames.join(", ")}>
-        {fontNames[0]}
-        {fontNames.length > 1 ? ` +${fontNames.length - 1}` : ""}
-      </span>
-      <span className="chip-dim">{sizes.join("/")} pt</span>
-      {missing.length > 0 && (
-        <span
-          className="chip-warn"
-          title="The PDF only contains the letters it originally used. For new letters the full font installed on this computer is used (Chrome/Edge will ask for permission when downloading), otherwise the closest standard font."
-        >
-          ⚠ {missing.slice(0, 5).join(" ")} not in original font
-        </span>
-      )}
-      {overflow && (
-        <span className="chip-warn" title="The paragraph now has more lines than before and may overlap content below it.">
-          ⚠ longer than original
-        </span>
-      )}
-      {edited && (
-        <button type="button" className="chip-btn" onClick={() => onRevert(block.id)}>
-          Revert
-        </button>
-      )}
-    </div>
-  );
+  const vertical = minY > 70 ? { bottom: viewport.height - minY + 8 } : { top: maxY + 8 };
+  const width = 520;
+  return minX + width > viewport.width
+    ? { ...vertical, right: Math.max(4, viewport.width - maxX) }
+    : { ...vertical, left: Math.max(4, minX) };
 }

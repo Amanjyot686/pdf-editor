@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import UploadZone from "./components/UploadZone.jsx";
 import PdfPage from "./components/PdfPage.jsx";
 import { openPdf } from "./lib/pdfjs.js";
-import { getFontInfo, missingChars, resetFonts } from "./lib/fonts.js";
+import { getLoadedFont, missingChars, resetFonts, resolveVariant } from "./lib/fonts.js";
 import { localFontsSupported, requestLocalFonts } from "./lib/localFonts.js";
 import { exportEditedPdf } from "./lib/exportPdf.js";
+import { isEdited } from "./lib/entries.js";
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3];
 
@@ -29,7 +30,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const changed = useMemo(() => Object.values(edits).filter((e) => e.text !== e.block.text), [edits]);
+  const changed = useMemo(() => Object.values(edits).filter(isEdited), [edits]);
   const changedRef = useRef(changed);
   changedRef.current = changed;
 
@@ -66,13 +67,15 @@ export default function App() {
     if (entry) setEdits((prev) => (prev[id] ? prev : { ...prev, [id]: entry }));
   }, []);
 
-  const handleChange = useCallback((id, { content, lines }) => {
+  // `patch` holds new content / lines, and optionally align or formatted.
+  const handleChange = useCallback((id, patch) => {
     setEdits((prev) => {
       const cur = prev[id];
       if (!cur) return prev;
-      const text = content.map((r) => r.text).join("");
-      if (text !== cur.text) setDirty(true);
-      return { ...prev, [id]: { ...cur, content, lines, text } };
+      const next = { ...cur, ...patch };
+      if (patch.content) next.text = patch.content.map((r) => r.text).join("");
+      if (next.text !== cur.text || patch.formatted || patch.align) setDirty(true);
+      return { ...prev, [id]: next };
     });
   }, []);
 
@@ -104,11 +107,15 @@ export default function App() {
     try {
       const entries = changedRef.current;
       if (localFontsSupported()) {
-        const runs = entries.flatMap((e) => e.content);
-        const infos = await Promise.all(runs.map((r) => getFontInfo(r.fontName)));
-        // Letters missing from the PDF's embedded fonts: ask for the installed
-        // fonts so they can be written in the exact same typeface.
-        if (runs.some((r, i) => missingChars(r.text.replace(/\n/g, ""), infos[i]).length)) await requestLocalFonts();
+        const runs = entries.flatMap((e) => e.content).filter((r) => r.text.trim());
+        // Letters missing from the PDF's embedded fonts, or a bold / italic
+        // style the PDF does not contain: ask for the installed fonts so they
+        // can be written in the exact same typeface.
+        const needsInstalled = runs.some((r) => {
+          const v = resolveVariant(r);
+          return !v.exact || missingChars(r.text.replace(/\n/g, ""), getLoadedFont(v.fontName)).length > 0;
+        });
+        if (needsInstalled) await requestLocalFonts();
       }
       const { bytes } = await exportEditedPdf(doc.bytes, entries);
       downloadBytes(bytes, doc.name.replace(/\.pdf$/i, "") + "-edited.pdf");
