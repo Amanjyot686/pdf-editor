@@ -3,7 +3,8 @@
 // PDFs have no notion of paragraphs: they only place glyph runs on the page.
 // We rebuild them in two steps:
 //   1. runs on the same baseline that sit close together form a line segment
-//      (a wide gap, e.g. between two columns, starts a new segment);
+//      (a wide gap, e.g. between two columns, or a table border starts a new
+//      segment);
 //   2. consecutive segments with the same font size, regular line spacing and
 //      a shared left / right / centre edge are merged into a block.
 // Each block keeps its styled runs (font, size, colour) and its original
@@ -22,8 +23,9 @@ function isBullet(str) {
  * @param items  text runs from extractTextItems()
  * @param opts.isBold   (fontName) => boolean
  * @param opts.measure  (text, fontName, sizePt) => natural width in pt
+ * @param opts.rules    ruling lines from extractRules(); text is never grouped across them
  */
-export function buildBlocks(items, { isBold, measure }) {
+export function buildBlocks(items, { isBold, measure, rules = [] }) {
   // Work in each run's own reading direction, so rotated text groups too.
   const runs = items.map((it) => {
     const [a, b, , , e, f] = it.transform;
@@ -46,7 +48,11 @@ export function buildBlocks(items, { isBold, measure }) {
   const segments = [];
   const byDeg = new Map();
   for (const r of runs) byDeg.set(r.deg, [...(byDeg.get(r.deg) || []), r]);
+  const rulesByDeg = new Map();
   for (const group of byDeg.values()) {
+    const { deg, cos, sin } = group[0];
+    const framed = rulesInFrame(rules, cos, sin);
+    rulesByDeg.set(deg, framed);
     group.sort((p, q) => q.y - p.y || p.x - q.x);
     const rows = [];
     for (const r of group) {
@@ -60,7 +66,7 @@ export function buildBlocks(items, { isBold, measure }) {
       for (const r of row.runs) {
         const gap = seg ? r.x - seg.x1 : 0;
         const size = Math.max(r.size, seg?.size || 0);
-        if (!seg || gap > 1.5 * size || gap < -0.3 * size) {
+        if (!seg || gap > 1.5 * size || gap < -0.3 * size || crossesVertical(framed.vertical, seg, r)) {
           const afterBullet = !!seg && seg.runs.length === 1 && isBullet(seg.runs[0].it.str);
           if (afterBullet) seg.isBullet = true;
           seg = { deg: r.deg, cos: r.cos, sin: r.sin, runs: [], x0: r.x, x1: r.x, y: r.y, size: 0, isBullet: false, afterBullet };
@@ -109,6 +115,7 @@ export function buildBlocks(items, { isBold, measure }) {
         const ratio = s.size / b.size;
         if (ratio < 0.85 || ratio > 1.18) continue;
         if (!(s.x0 < last.x1 && s.x1 > last.x0)) continue;
+        if (crossesHorizontal(rulesByDeg.get(s.deg).horizontal, last, s)) continue;
         const align = alignWith(b, s);
         if (!align) continue;
         // Bold heading followed by regular text (or vice versa): new paragraph.
@@ -123,6 +130,29 @@ export function buildBlocks(items, { isBold, measure }) {
   }
 
   return blocks.map((b, i) => finalize(b, i, measure));
+}
+
+// Ruling lines in a reading direction's frame, split into vertical and horizontal.
+function rulesInFrame(rules, cos, sin) {
+  const vertical = [], horizontal = [];
+  for (const r of rules) {
+    const x0 = r.x0 * cos + r.y0 * sin, y0 = -r.x0 * sin + r.y0 * cos;
+    const x1 = r.x1 * cos + r.y1 * sin, y1 = -r.x1 * sin + r.y1 * cos;
+    if (Math.abs(x1 - x0) < 0.5) vertical.push({ x: (x0 + x1) / 2, lo: Math.min(y0, y1), hi: Math.max(y0, y1) });
+    else if (Math.abs(y1 - y0) < 0.5) horizontal.push({ y: (y0 + y1) / 2, lo: Math.min(x0, x1), hi: Math.max(x0, x1) });
+  }
+  return { vertical, horizontal };
+}
+
+// A vertical rule (e.g. a table cell border) between a segment and the next run.
+function crossesVertical(vertical, seg, r) {
+  return vertical.some((v) => v.x > seg.x1 - 1 && v.x < r.x + 1 && v.lo < r.y + 0.6 * r.size && v.hi > r.y);
+}
+
+// A horizontal rule between a paragraph's last line and the segment below it.
+function crossesHorizontal(horizontal, last, s) {
+  const lo = Math.max(last.x0, s.x0), hi = Math.min(last.x1, s.x1);
+  return horizontal.some((h) => h.y < last.y && h.y > s.y + 0.5 * s.size && h.lo < hi && h.hi > lo);
 }
 
 // Merges a segment's runs into styled runs, inserting spaces at visual gaps.

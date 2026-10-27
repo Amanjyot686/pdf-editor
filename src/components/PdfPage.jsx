@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TextBlock, { S, blockMatrix } from "./TextBlock.jsx";
 import FormatToolbar from "./FormatToolbar.jsx";
-import { extractTextItems } from "../lib/pdfjs.js";
+import { extractRules, extractTextItems } from "../lib/pdfjs.js";
 import { ensureFont } from "../lib/fonts.js";
 import { buildBlocks } from "../lib/layout.js";
 import { applyPoint, coverRect, multiply, rectCorners } from "../lib/geometry.js";
@@ -73,11 +73,11 @@ export default function PdfPage({ pdf, pageIndex, scale, edits, active, onActiva
         await task.promise;
         if (cancelled || textLoaded.current) return;
         // Fonts are available from pdf.js once the page has been rendered.
-        const items = await extractTextItems(page, pageIndex);
+        const [items, rules] = await Promise.all([extractTextItems(page, pageIndex), extractRules(page)]);
         const names = [...new Set(items.map((i) => i.fontName))];
         const infos = await Promise.all(names.map((n) => ensureFont(page, n)));
         const fontMap = Object.fromEntries(names.map((n, i) => [n, infos[i]]));
-        const list = buildBlocks(items, { isBold: (n) => fontMap[n]?.bold, measure: makeMeasure(fontMap) });
+        const list = buildBlocks(items, { isBold: (n) => fontMap[n]?.bold, measure: makeMeasure(fontMap), rules });
         textLoaded.current = true;
         setFonts(fontMap);
         setBlocks(list);
